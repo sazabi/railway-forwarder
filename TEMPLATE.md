@@ -27,7 +27,9 @@ If the GHCR package is private, enter read-only registry credentials in the serv
 
 **Name:** Sazabi Log Forwarder
 
-**Short description:** Send the deploy and HTTP logs of every service in your environment to Sazabi, with no code changes.
+**Short description (75 characters max):** Forward deploy and HTTP logs from every Railway service to Sazabi.
+
+**Icon:** https://www.sazabi.com/icon.svg
 
 **Category:** Observability
 
