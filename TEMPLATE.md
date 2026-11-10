@@ -1,6 +1,6 @@
 # Railway template
 
-The one-click template is composed by hand in Railway's template composer, in a Sazabi-owned Railway workspace. This file is the source of truth for what to enter. Update it together with the composer whenever the template changes.
+The one-click template is composed by hand in Railway's template composer, in the Sazabi Railway workspace (railway.com/workspace/templates → New Template). This file is the source of truth for what to enter. Update it together with the composer whenever the template changes.
 
 ## Service
 
@@ -13,7 +13,7 @@ The one-click template is composed by hand in Railway's template composer, in a 
 | Replicas | 1 |
 | Restart policy | Always |
 
-Railway can only pull the image once the GHCR package is public, so the image must be made public before the template is published.
+If the GHCR package is private, enter read-only registry credentials in the service settings; Railway keeps them hidden from people who deploy the template. Otherwise make the package public before publishing the template.
 
 ## Variables
 
