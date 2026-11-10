@@ -33,12 +33,16 @@ func run() error {
 	}
 
 	var level slog.Level
-	if err := level.UnmarshalText([]byte(cfg.LogLevel)); err != nil {
+	levelErr := level.UnmarshalText([]byte(cfg.LogLevel))
+	if levelErr != nil {
 		level = slog.LevelInfo
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(log)
 	log.Info("starting railway-forwarder", "version", version)
+	if levelErr != nil {
+		log.Warn("invalid log level, using info", "error", levelErr, "log_level", cfg.LogLevel)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -47,7 +51,11 @@ func run() error {
 	exportCtx, stopExport := context.WithCancel(context.Background())
 	go exporter.Run(exportCtx)
 
-	rw := railway.NewClient(cfg.RailwayToken, cfg.RailwayHTTPURL, cfg.RailwayWSURL)
+	rw := railway.NewClient(railway.ClientOptions{
+		Token:   cfg.RailwayToken,
+		HTTPURL: cfg.RailwayHTTPURL,
+		WSURL:   cfg.RailwayWSURL,
+	})
 	fw := forwarder.New(rw, exporter, forwarder.Options{
 		EnvironmentID:   cfg.EnvironmentID,
 		SelfServiceID:   cfg.SelfServiceID,

@@ -30,6 +30,7 @@ type Exporter struct {
 	done     chan struct{}
 	log      *slog.Logger
 	backoff  time.Duration
+	grace    time.Duration
 }
 
 // NewExporter sends to `<intakeURL>/v1/logs`.
@@ -42,6 +43,7 @@ func NewExporter(intakeURL, version string, log *slog.Logger) *Exporter {
 		done:     make(chan struct{}),
 		log:      log,
 		backoff:  500 * time.Millisecond,
+		grace:    shutdownGrace,
 	}
 }
 
@@ -64,12 +66,37 @@ func (e *Exporter) Run(ctx context.Context) {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 	batch := make([]Record, 0, maxBatch)
+	// flush keeps the batch when shutdown interrupts it, so the drain resends it.
 	flush := func(fctx context.Context) {
 		if len(batch) == 0 {
 			return
 		}
-		e.send(fctx, batch)
-		batch = batch[:0]
+		if e.send(fctx, batch) {
+			batch = batch[:0]
+		}
+	}
+	drain := func() {
+		sctx, cancel := context.WithTimeout(context.Background(), e.grace)
+		defer cancel()
+		for {
+			if sctx.Err() != nil {
+				e.log.Error("dropped logs at shutdown", "records", len(batch)+len(e.queue))
+				return
+			}
+			select {
+			case r := <-e.queue:
+				batch = append(batch, r)
+				if len(batch) >= maxBatch {
+					flush(sctx)
+				}
+			default:
+				flush(sctx)
+				if len(batch) > 0 {
+					e.log.Error("dropped logs at shutdown", "records", len(batch))
+				}
+				return
+			}
+		}
 	}
 	for {
 		select {
@@ -81,20 +108,10 @@ func (e *Exporter) Run(ctx context.Context) {
 		case <-ticker.C:
 			flush(ctx)
 		case <-ctx.Done():
-			sctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
-			defer cancel()
-			for {
-				select {
-				case r := <-e.queue:
-					batch = append(batch, r)
-					if len(batch) >= maxBatch {
-						flush(sctx)
-					}
-				default:
-					flush(sctx)
-					return
-				}
-			}
+		}
+		if ctx.Err() != nil {
+			drain()
+			return
 		}
 	}
 }
@@ -102,11 +119,17 @@ func (e *Exporter) Run(ctx context.Context) {
 // Wait blocks until Run has returned.
 func (e *Exporter) Wait() { <-e.done }
 
-func (e *Exporter) send(ctx context.Context, batch []Record) {
+// send delivers a batch, retrying transient failures. It returns false only
+// when ctx ended before the batch was delivered or rejected, so the caller can
+// resend it with a fresh context.
+func (e *Exporter) send(ctx context.Context, batch []Record) bool {
+	if ctx.Err() != nil {
+		return false
+	}
 	payload, err := Encode(batch, e.version, time.Now())
 	if err != nil {
 		e.log.Error("encode otlp batch", "error", err, "records", len(batch))
-		return
+		return true
 	}
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
@@ -118,12 +141,15 @@ func (e *Exporter) send(ctx context.Context, batch []Record) {
 	for attempt := 1; ; attempt++ {
 		retryAfter, err := e.post(ctx, body)
 		if err == nil {
-			return
+			return true
+		}
+		if ctx.Err() != nil {
+			return false
 		}
 		var perm permanentError
-		if asPermanent(err, &perm) || attempt >= maxAttempts || ctx.Err() != nil {
+		if asPermanent(err, &perm) || attempt >= maxAttempts {
 			e.log.Error("dropped log batch", "error", err, "records", len(batch), "attempts", attempt)
-			return
+			return true
 		}
 		wait := delay + rand.N(delay/2+1)
 		if retryAfter > wait {
@@ -133,8 +159,7 @@ func (e *Exporter) send(ctx context.Context, batch []Record) {
 		select {
 		case <-time.After(wait):
 		case <-ctx.Done():
-			e.log.Error("dropped log batch", "error", ctx.Err(), "records", len(batch), "attempts", attempt)
-			return
+			return false
 		}
 		delay = min(delay*2, 30*time.Second)
 	}

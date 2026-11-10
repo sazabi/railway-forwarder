@@ -21,6 +21,8 @@ type fakeRailway struct {
 	deploy    []string
 	http      map[string][]string
 	subscribe chan string
+	// onDeploySubscribe runs before the deploy batches are delivered.
+	onDeploySubscribe func()
 }
 
 func (f *fakeRailway) FetchEnvironment(context.Context, string) (*railway.Environment, error) {
@@ -36,6 +38,9 @@ func (f *fakeRailway) Subscribe(ctx context.Context, query string, vars map[stri
 	switch {
 	case strings.Contains(query, "environmentLogs"):
 		batches = f.deploy
+		if f.onDeploySubscribe != nil {
+			f.onDeploySubscribe()
+		}
 		f.subscribe <- "deploy"
 	case strings.Contains(query, "httpLogs"):
 		id := vars["deploymentId"].(string)
@@ -103,12 +108,11 @@ func TestForwarderMapsDeployAndHTTPLogs(t *testing.T) {
 	f := New(rw, out, Options{EnvironmentID: "env", SelfServiceID: "self", DeployLogs: true, HTTPLogs: true}, slog.New(slog.DiscardHandler))
 
 	// A service created after startup: it appears on the next environment fetch.
-	go func() {
-		<-rw.subscribe
+	rw.onDeploySubscribe = func() {
 		rw.mu.Lock()
 		rw.env.Services = map[string]string{"web": "Web", "self": "Forwarder", "new": "New"}
 		rw.mu.Unlock()
-	}()
+	}
 	f.lastRefresh = time.Now().Add(-time.Minute)
 
 	ctx, cancel := context.WithCancel(context.Background())

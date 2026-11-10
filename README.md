@@ -4,7 +4,7 @@ Send the logs of every service in a [Railway](https://railway.com) environment t
 
 Railway has no log drain. This forwarder runs as one extra service in your environment, reads your services' **deploy logs** and **HTTP logs** from Railway's API, and sends them to Sazabi over OTLP/HTTP. Services you add later are picked up automatically.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/TEMPLATE_CODE)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/sazabi-log-forwarder)
 
 ## Before you deploy
 
@@ -74,7 +74,7 @@ The forwarder needs no public networking and no volume, and runs as a single rep
 
 ## Development
 
-See [CLAUDE.md](CLAUDE.md). Releases are cut by pushing a `vX.Y.Z` tag, which publishes `ghcr.io/sazabi/railway-forwarder:vX.Y.Z`.
+See [CLAUDE.md](CLAUDE.md). This repository is a release mirror of `packages/railway-forwarder` in the Sazabi monorepo; a maintainer-dispatched release pushes a `vX.Y.Z` tag here, which publishes `ghcr.io/sazabi/railway-forwarder:vX.Y.Z`.
 
 ## Credits
 

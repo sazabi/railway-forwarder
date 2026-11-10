@@ -145,11 +145,18 @@ func (f *Forwarder) refreshLoop(ctx context.Context) {
 	}
 }
 
-func (f *Forwarder) resource(serviceID, deploymentID, instanceID string) otlp.Resource {
+// source identifies the Railway service, deployment and instance a log came from.
+type source struct {
+	serviceID    string
+	deploymentID string
+	instanceID   string
+}
+
+func (f *Forwarder) resource(src source) otlp.Resource {
 	env := f.environment()
-	name, ok := env.Services[serviceID]
+	name, ok := env.Services[src.serviceID]
 	if !ok {
-		name = serviceID
+		name = src.serviceID
 	}
 	return otlp.Resource{
 		ServiceName:          name,
@@ -157,9 +164,9 @@ func (f *Forwarder) resource(serviceID, deploymentID, instanceID string) otlp.Re
 		ProjectName:          env.ProjectName,
 		ProjectID:            env.ProjectID,
 		EnvironmentID:        env.ID,
-		ServiceID:            serviceID,
-		DeploymentID:         deploymentID,
-		DeploymentInstanceID: instanceID,
+		ServiceID:            src.serviceID,
+		DeploymentID:         src.deploymentID,
+		DeploymentInstanceID: src.instanceID,
 	}
 }
 

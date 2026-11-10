@@ -47,21 +47,21 @@ type environmentLogsData struct {
 // The subscription is unfiltered, so services added later are included without
 // resubscribing.
 func (f *Forwarder) streamDeployLogs(ctx context.Context) {
-	cursor := time.Now().UTC()
+	cursor := newLogCursor(time.Now().UTC())
 	f.resubscribe(ctx, "deploy", nil, func(ctx context.Context) error {
 		vars := map[string]any{
 			"environmentId": f.opts.EnvironmentID,
 			"filter":        "",
 			"beforeLimit":   5000,
-			"beforeDate":    cursor.Format(time.RFC3339Nano),
+			"beforeDate":    cursor.at.Format(time.RFC3339Nano),
 		}
 		return f.rw.Subscribe(ctx, environmentLogsSubscription, vars, func(data json.RawMessage) error {
 			var payload environmentLogsData
 			if err := json.Unmarshal(data, &payload); err != nil {
-				f.log.Warn("decode railway deploy logs", "error", err)
+				f.log.Warn("decode railway deploy logs", "error", err, "bytes", len(data))
 				return nil
 			}
-			records := f.deployRecords(ctx, payload.EnvironmentLogs, &cursor)
+			records := f.deployRecords(ctx, payload.EnvironmentLogs, cursor)
 			if len(records) == 0 {
 				return nil
 			}
@@ -70,7 +70,8 @@ func (f *Forwarder) streamDeployLogs(ctx context.Context) {
 	})
 }
 
-func (f *Forwarder) deployRecords(ctx context.Context, logs []environmentLog, cursor *time.Time) []otlp.Record {
+func (f *Forwarder) deployRecords(ctx context.Context, logs []environmentLog, cursor *logCursor) []otlp.Record {
+	sortByTime(logs, func(l environmentLog) time.Time { return l.Timestamp })
 	records := make([]otlp.Record, 0, len(logs))
 	for _, l := range logs {
 		// Logs without a message carry only their level attribute.
@@ -81,10 +82,9 @@ func (f *Forwarder) deployRecords(ctx context.Context, logs []environmentLog, cu
 		if l.Timestamp.Nanosecond() == 0 {
 			continue
 		}
-		if !l.Timestamp.After(*cursor) {
+		if !cursor.accept(l.Timestamp, l.Tags.DeploymentInstanceID+"\x00"+l.Tags.ServiceID+"\x00"+l.Message) {
 			continue
 		}
-		*cursor = l.Timestamp
 		if l.Tags.ServiceID == "" || l.Tags.ServiceID == f.opts.SelfServiceID {
 			continue
 		}
@@ -108,7 +108,7 @@ func (f *Forwarder) deployRecord(l environmentLog) otlp.Record {
 	}
 	num, text := otlp.Severity(level)
 	return otlp.Record{
-		Resource:       f.resource(l.Tags.ServiceID, l.Tags.DeploymentID, l.Tags.DeploymentInstanceID),
+		Resource:       f.resource(source{serviceID: l.Tags.ServiceID, deploymentID: l.Tags.DeploymentID, instanceID: l.Tags.DeploymentInstanceID}),
 		Time:           l.Timestamp,
 		SeverityNumber: num,
 		SeverityText:   text,

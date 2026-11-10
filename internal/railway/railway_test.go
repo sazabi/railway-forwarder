@@ -69,7 +69,7 @@ func TestSubscribeProtocol(t *testing.T) {
 	})
 	defer srv.Close()
 
-	c := NewClient("tok", srv.URL, "ws"+strings.TrimPrefix(srv.URL, "http"))
+	c := NewClient(ClientOptions{Token: "tok", HTTPURL: srv.URL, WSURL: "ws" + strings.TrimPrefix(srv.URL, "http")})
 	var got []string
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -94,7 +94,7 @@ func TestSubscribeSurfacesGraphQLErrors(t *testing.T) {
 		_, _, _ = conn.Read(ctx)
 	})
 	defer srv.Close()
-	c := NewClient("tok", srv.URL, "ws"+strings.TrimPrefix(srv.URL, "http"))
+	c := NewClient(ClientOptions{Token: "tok", HTTPURL: srv.URL, WSURL: "ws" + strings.TrimPrefix(srv.URL, "http")})
 	err := c.Subscribe(context.Background(), "subscription { x }", nil, func(json.RawMessage) error { return nil })
 	if !IsNotAuthorized(err) {
 		t.Fatalf("err = %v, want not authorized", err)
@@ -126,7 +126,7 @@ func TestFetchEnvironment(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	env, err := NewClient("tok", srv.URL, "").FetchEnvironment(context.Background(), "env")
+	env, err := NewClient(ClientOptions{Token: "tok", HTTPURL: srv.URL}).FetchEnvironment(context.Background(), "env")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,7 +143,7 @@ func TestQueryErrors(t *testing.T) {
 		_, _ = w.Write([]byte(`{"errors":[{"message":"Not Authorized"}],"data":null}`))
 	}))
 	defer srv.Close()
-	_, err := NewClient("tok", srv.URL, "").FetchEnvironment(context.Background(), "env")
+	_, err := NewClient(ClientOptions{Token: "tok", HTTPURL: srv.URL}).FetchEnvironment(context.Background(), "env")
 	if !IsNotAuthorized(err) {
 		t.Fatalf("err = %v", err)
 	}

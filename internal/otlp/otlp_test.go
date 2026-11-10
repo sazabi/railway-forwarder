@@ -133,8 +133,9 @@ func TestExporterRetriesAndSends(t *testing.T) {
 	}
 	cancel()
 	e.Wait()
-	if calls.Load() != 2 {
-		t.Errorf("calls = %d, want 2", calls.Load())
+	// Delivery is at least once: cancelling before the 200 arrives resends.
+	if calls.Load() < 2 {
+		t.Errorf("calls = %d, want at least 2", calls.Load())
 	}
 }
 
@@ -154,5 +155,67 @@ func TestExporterDoesNotRetryClientErrors(t *testing.T) {
 	e.Wait()
 	if calls.Load() != 1 {
 		t.Errorf("calls = %d, want 1", calls.Load())
+	}
+}
+
+func TestExporterResendsInFlightBatchOnShutdown(t *testing.T) {
+	var calls atomic.Int32
+	inFlight := make(chan struct{})
+	delivered := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		if calls.Add(1) == 1 {
+			close(inFlight)
+			<-r.Context().Done()
+			return
+		}
+		delivered <- struct{}{}
+	}))
+	defer srv.Close()
+
+	e := NewExporter(srv.URL, "test", slog.New(slog.DiscardHandler))
+	ctx, cancel := context.WithCancel(context.Background())
+	go e.Run(ctx)
+	for range maxBatch {
+		if err := e.Add(ctx, Record{Time: time.Now(), Body: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-inFlight
+	cancel()
+	e.Wait()
+	select {
+	case <-delivered:
+	default:
+		t.Fatal("the in-flight batch was not resent during shutdown")
+	}
+}
+
+func TestExporterStopsDrainingWhenShutdownGraceExpires(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	e := NewExporter(srv.URL, "test", slog.New(slog.DiscardHandler))
+	e.backoff = 20 * time.Millisecond
+	e.grace = 100 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	for range 3 * maxBatch {
+		if err := e.Add(ctx, Record{Time: time.Now(), Body: "x"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancel()
+	start := time.Now()
+	e.Run(ctx)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("shutdown took %s, want it bounded by the grace period", elapsed)
+	}
+	if calls.Load() == 0 {
+		t.Fatal("the drain never tried to deliver")
 	}
 }

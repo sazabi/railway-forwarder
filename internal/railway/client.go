@@ -26,11 +26,18 @@ type Client struct {
 	httpClient *http.Client
 }
 
-func NewClient(token, httpURL, wsURL string) *Client {
+// ClientOptions names the client's settings, which are all strings.
+type ClientOptions struct {
+	Token   string
+	HTTPURL string
+	WSURL   string
+}
+
+func NewClient(opts ClientOptions) *Client {
 	return &Client{
-		token:      token,
-		httpURL:    httpURL,
-		wsURL:      wsURL,
+		token:      opts.Token,
+		httpURL:    opts.HTTPURL,
+		wsURL:      opts.WSURL,
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }

@@ -109,7 +109,7 @@ func (f *Forwarder) manageHTTPLogs(ctx context.Context) {
 			sctx, cancel := context.WithCancel(ctx)
 			subs[id] = &httpSubscription{cancel: cancel, serviceID: serviceID}
 			f.log.Info("following http logs", "service", env.Services[serviceID], "deployment_id", id)
-			wg.Go(func() { f.streamHTTPLogs(sctx, id, serviceID) })
+			wg.Go(func() { f.streamHTTPLogs(sctx, source{serviceID: serviceID, deploymentID: id}) })
 		}
 		for id, s := range subs {
 			if _, ok := env.HTTPDeployments[id]; ok {
@@ -118,6 +118,7 @@ func (f *Forwarder) manageHTTPLogs(ctx context.Context) {
 			if s.removedAt.IsZero() {
 				s.removedAt = now
 			} else if now.Sub(s.removedAt) >= removedDeploymentGrace {
+				f.log.Info("stopped following http logs", "service", env.Services[s.serviceID], "deployment_id", id)
 				s.cancel()
 				delete(subs, id)
 			}
@@ -137,28 +138,29 @@ func (f *Forwarder) manageHTTPLogs(ctx context.Context) {
 	}
 }
 
-func (f *Forwarder) streamHTTPLogs(ctx context.Context, deploymentID, serviceID string) {
-	cursor := f.started
+func (f *Forwarder) streamHTTPLogs(ctx context.Context, src source) {
+	deploymentID := src.deploymentID
+	cursor := newLogCursor(f.started)
 	f.resubscribe(ctx, "http", []any{"deployment_id", deploymentID}, func(ctx context.Context) error {
 		vars := map[string]any{
 			"deploymentId": deploymentID,
 			"filter":       "",
 			"beforeLimit":  5000,
-			"beforeDate":   cursor.Format(time.RFC3339Nano),
+			"beforeDate":   cursor.at.Format(time.RFC3339Nano),
 		}
 		return f.rw.Subscribe(ctx, httpLogsSubscription, vars, func(data json.RawMessage) error {
 			var payload httpLogsData
 			if err := json.Unmarshal(data, &payload); err != nil {
-				f.log.Warn("decode railway http logs", "error", err)
+				f.log.Warn("decode railway http logs", "error", err, "deployment_id", deploymentID, "bytes", len(data))
 				return nil
 			}
+			sortByTime(payload.HTTPLogs, func(l httpLog) time.Time { return l.Timestamp })
 			records := make([]otlp.Record, 0, len(payload.HTTPLogs))
 			for _, l := range payload.HTTPLogs {
-				if !l.Timestamp.After(cursor) {
+				if !cursor.accept(l.Timestamp, l.RequestID) {
 					continue
 				}
-				cursor = l.Timestamp
-				records = append(records, f.httpRecord(l, serviceID, deploymentID))
+				records = append(records, f.httpRecord(l, src))
 			}
 			if len(records) == 0 {
 				return nil
@@ -179,7 +181,7 @@ func httpSeverity(status int64) (int, string) {
 	}
 }
 
-func (f *Forwarder) httpRecord(l httpLog, serviceID, deploymentID string) otlp.Record {
+func (f *Forwarder) httpRecord(l httpLog, src source) otlp.Record {
 	body, _ := json.Marshal(httpBody{
 		Method:             l.Method,
 		Path:               l.Path,
@@ -219,7 +221,7 @@ func (f *Forwarder) httpRecord(l httpLog, serviceID, deploymentID string) otlp.R
 	}
 	num, text := httpSeverity(l.HTTPStatus)
 	return otlp.Record{
-		Resource:       f.resource(serviceID, deploymentID, ""),
+		Resource:       f.resource(src),
 		Time:           l.Timestamp,
 		SeverityNumber: num,
 		SeverityText:   text,
